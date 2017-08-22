@@ -19,7 +19,7 @@ type LockDict struct {
 	lock sync.RWMutex
 }
 
-func (dict *LockDict) SetVal(key, val string) {
+func (dict *LockDict) SetKey(key, val string) {
 	dict.lock.Lock()
 	defer dict.lock.Unlock()
 	dict.dict[key] = val
@@ -37,9 +37,15 @@ func (dict *LockDict) CasVal(key, oldVal, newVal string, setOnNotExists bool) bo
 
 	return false
 }
-func (dict *LockDict) ReadVal(key string) (string, bool) {
+func (dict *LockDict) ReadKey(key string) (string, bool) {
 	dict.lock.RLock()
 	defer dict.lock.RUnlock()
 	val, exists := dict.dict[key]
 	return val, exists
+}
+
+func (dict *LockDict) DeleteKey(key string) {
+	dict.lock.Lock()
+	defer dict.lock.Unlock()
+	delete(dict.dict, key)
 }

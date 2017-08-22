@@ -1,8 +1,8 @@
 package chandict
 
 import (
-	"github.com/sargun/goconcurrency/types"
 	"context"
+	"github.com/sargun/goconcurrency/types"
 )
 
 var _ types.ConcurrentDict = (*ChanDict)(nil)
@@ -31,19 +31,26 @@ type casRequest struct {
 	responseChan   chan bool
 }
 
+type deleteRequest struct {
+	deleteKey    string
+	responseChan chan struct{}
+}
+
 type ChanDict struct {
-	dict          map[string]string
-	readRequests  chan readRequest
-	writeRequests chan writeRequest
-	casRequests   chan casRequest
+	dict           map[string]string
+	readRequests   chan readRequest
+	writeRequests  chan writeRequest
+	casRequests    chan casRequest
+	deleteRequests chan deleteRequest
 }
 
 func NewChanDict(ctx context.Context) *ChanDict {
 	d := &ChanDict{
-		dict:          make(map[string]string),
-		readRequests:  make(chan readRequest),
-		writeRequests: make(chan writeRequest),
-		casRequests:   make(chan casRequest),
+		dict:           make(map[string]string),
+		readRequests:   make(chan readRequest),
+		writeRequests:  make(chan writeRequest),
+		casRequests:    make(chan casRequest),
+		deleteRequests: make(chan deleteRequest),
 	}
 	go d.run(ctx)
 	return d
@@ -56,9 +63,12 @@ func (dict *ChanDict) run(parentCtx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case dr := <-dict.deleteRequests:
+			delete(dict.dict, dr.deleteKey)
+			close(dr.responseChan)
 		case wr := <-dict.writeRequests:
 			dict.dict[wr.readKey] = wr.writeVal
-			wr.responseChan <- struct{}{}
+			close(wr.responseChan)
 		case rr := <-dict.readRequests:
 			val, exists := dict.dict[rr.readKey]
 			rr.responseChan <- readRequestResponse{val, exists}
@@ -78,14 +88,14 @@ func (dict *ChanDict) run(parentCtx context.Context) {
 	}
 }
 
-func (dict *ChanDict) SetVal(key, val string) {
+func (dict *ChanDict) SetKey(key, val string) {
 	c := make(chan struct{})
 	w := writeRequest{readKey: key, writeVal: val, responseChan: c}
 	dict.writeRequests <- w
 	<-c
 }
 
-func (dict *ChanDict) ReadVal(key string) (string, bool) {
+func (dict *ChanDict) ReadKey(key string) (string, bool) {
 	c := make(chan readRequestResponse)
 	w := readRequest{readKey: key, responseChan: c}
 	dict.readRequests <- w
@@ -98,4 +108,11 @@ func (dict *ChanDict) CasVal(key, oldVal, newVal string, setOnNotExists bool) bo
 	w := casRequest{readKey: key, oldVal: oldVal, newVal: newVal, responseChan: c, setOnNotExists: setOnNotExists}
 	dict.casRequests <- w
 	return <-c
+}
+
+func (dict *ChanDict) DeleteKey(key string) {
+	c := make(chan struct{})
+	d := deleteRequest{deleteKey: key, responseChan: c}
+	dict.deleteRequests <- d
+	<-c
 }
