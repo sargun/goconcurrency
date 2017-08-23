@@ -2,13 +2,21 @@ package chandict
 
 import "testing"
 import (
-	"context"
 	"github.com/sargun/goconcurrency/types"
+	"runtime"
 )
 
 func TestConcurrentDict(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	d := NewChanDict(ctx)
+	d := NewChanDict()
 	types.TestImplementation(t, d)
+}
+
+func TestBreak(t *testing.T) {
+	innerBitBreak()
+	/* Force GC, to require finalizer to run */
+	runtime.GC()
+}
+func innerBitBreak() {
+	d := NewChanDict()
+	d.ReadKey("foo")
 }

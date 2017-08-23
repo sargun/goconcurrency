@@ -3,6 +3,7 @@ package chandict
 import (
 	"context"
 	"github.com/sargun/goconcurrency/types"
+	"runtime"
 )
 
 var _ types.ConcurrentDict = (*ChanDict)(nil)
@@ -44,41 +45,52 @@ type ChanDict struct {
 	deleteRequests chan deleteRequest
 }
 
-func NewChanDict(ctx context.Context) *ChanDict {
+func NewChanDict() *ChanDict {
+	ctx, cancel := context.WithCancel(context.Background())
+	readRequests := make(chan readRequest)
+	writeRequests := make(chan writeRequest)
+	casRequests := make(chan casRequest)
+	deleteRequests := make(chan deleteRequest)
 	d := &ChanDict{
-		dict:           make(map[string]string),
-		readRequests:   make(chan readRequest),
-		writeRequests:  make(chan writeRequest),
-		casRequests:    make(chan casRequest),
-		deleteRequests: make(chan deleteRequest),
+		readRequests:   readRequests,
+		writeRequests:  writeRequests,
+		casRequests:    casRequests,
+		deleteRequests: deleteRequests,
 	}
-	go d.run(ctx)
+	// This is a lambda, so we don't have to add members to the struct
+	runtime.SetFinalizer(d, func(dict *ChanDict) {
+		cancel()
+	})
+	// We can't have run be a method of ChanDict, because otherwise then the goroutine will keep the reference alive
+	go run(ctx, readRequests, writeRequests, casRequests, deleteRequests)
 	return d
 }
 
-func (dict *ChanDict) run(parentCtx context.Context) {
+func run(parentCtx context.Context, readRequests <-chan readRequest, writeRequests <-chan writeRequest, casRequests <-chan casRequest, deleteRequests <-chan deleteRequest) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
+	localDict := make(map[string]string)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case dr := <-dict.deleteRequests:
-			delete(dict.dict, dr.deleteKey)
+		case dr := <-deleteRequests:
+			delete(localDict, dr.deleteKey)
 			close(dr.responseChan)
-		case wr := <-dict.writeRequests:
-			dict.dict[wr.readKey] = wr.writeVal
+		case wr := <-writeRequests:
+			localDict[wr.readKey] = wr.writeVal
 			close(wr.responseChan)
-		case rr := <-dict.readRequests:
-			val, exists := dict.dict[rr.readKey]
+		case rr := <-readRequests:
+			val, exists := localDict[rr.readKey]
 			rr.responseChan <- readRequestResponse{val, exists}
-		case cr := <-dict.casRequests:
-			if val, exists := dict.dict[cr.readKey]; exists && val == cr.oldVal {
-				dict.dict[cr.readKey] = cr.newVal
+		case cr := <-casRequests:
+			if val, exists := localDict[cr.readKey]; exists && val == cr.oldVal {
+				localDict[cr.readKey] = cr.newVal
 
 				cr.responseChan <- true
 			} else if !exists && cr.setOnNotExists {
-				dict.dict[cr.readKey] = cr.newVal
+				localDict[cr.readKey] = cr.newVal
 				cr.responseChan <- true
 			} else {
 				cr.responseChan <- false
